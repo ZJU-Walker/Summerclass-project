@@ -1,0 +1,52 @@
+<!DOCTYPE HTML><html>
+<head>
+  <title>ESP32 Web Server</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" type="text/css" href="style.css">
+   <script src="three.min.js"></script>
+</head>
+<body>
+  <div class="topnav">
+    <h1>Sunnybot 4+1DOF ARM </h1>
+  </div>
+  <div class="content">
+    <div class="cards">
+      <div class="card">
+        <p class="card-title">舵机原始角度</p>
+        <p class="card-title">Servo Raw Angles</p>
+        <p><span class="reading">（舵机0）θ1: <span id="theta1"></span> °</span></p>
+        <p><span class="reading">（舵机1）θ2: <span id="theta2"></span> °</span></p>
+        <p><span class="reading">（舵机2）θ3: <span id="theta3"></span> °</span></p>
+        <p><span class="reading">（舵机3）θ4: <span id="theta4"></span> °</span></p>
+        <p><span class="reading">（舵机4）θ5: <span id="theta5"></span> °</span></p>
+      </div>
+      <div class="card">
+        <p class="card-title">关节空间角度</p>
+        <p class="card-title">Arm Joint Angles</p>
+        <p><span class="reading">（基关节）J1: <span id="joint1"></span> °</span></p>
+        <p><span class="reading">（肩关节）J2: <span id="joint2"></span> °</span></p>
+        <p><span class="reading">（肘关节）J3: <span id="joint3"></span> °</span></p>
+        <p><span class="reading">（腕关节）J4: <span id="joint4"></span> °</span></p>
+        <p><span class="reading">（爪关节）G1: <span id="gripper1"></span> °</span></p>
+
+      </div>
+      <div class="card">
+        <p class="card-title">笛卡尔空间位姿</p>
+        <p class="card-title">Cartesian Coordinates</p>
+        <p><span class="reading">（末端）X: <span id="theta1"></span> °</span></p>
+        <p><span class="reading">（末端）Y: <span id="theta2"></span> °</span></p>
+        <p><span class="reading">（末端）Z: <span id="theta3"></span> °</span></p>
+        <p><span class="reading">（俯仰）φ: <span id="pitch"></span> °</span></p>
+        <button id="reset" onclick="resetPosition(this)">RESET POSITION</button>
+        <button id="resetX" onclick="resetPosition(this)">X</button>
+        <button id="resetY" onclick="resetPosition(this)">Y</button>
+        <button id="resetZ" onclick="resetPosition(this)">Z</button>
+      </div>
+    </div>
+    <div class="cube-content">
+      <div id="3Dcube"></div>
+    </div>
+  </div>
+<script src="script.js"></script>
+</body>
+</html>
