@@ -1,9 +1,4 @@
-
-//前后巡线测试
-// 20220705更新 巡线测试
-
 #include <Ticker.h>  //定时中断
-
 #include "OOPConfig.h"
 
 #ifdef USE_OLED
@@ -46,16 +41,21 @@ float angle2rad(float angle) { return angle * M_PI / 180; }
 float rad2angle(float rad) { return rad * 180 / M_PI; }
 
 
-//****************** MPU6050***************************//
-#endif
+//其他变量——运动状态全局变量
+#define SINGLEGRAY_PIN 12  //12引脚的宏定义
+int generalstate = 1;//用于记录小车总的运动状态
 
-//其他变量，12的宏定义
-#define SINGLEGRAY_PIN 12  
+int motionstate = 1;//用于切换小车循迹的运行状态
+int motionstatepre = 1;
+
+//其他变量——黑线读取
 int linenember=0;//用于记录通过的黑线数量
 int ColorP12=0;//用于读取P12的值，黑为1
 int KANGGANRAO=0;//用于抗干扰
 int Record=0;//用于记录上一次黑线的值
-int MotionState=1;//用于判断是那个运动阶段
+
+//****************** MPU6050***************************//
+#endif
 
 #ifndef DEBUG
 //#define DEBUG
@@ -103,8 +103,8 @@ PID VeloPID[WHEELS_NUM] = {
 BDCMotor motors;
 
 //*****************运行状态枚举**************************//
-enum CARMOTION { PAUSE, LEFTWARD, FORWARD, RIGHTWARD, BACKWARD, STOP };
-enum CARMOTION direction = PAUSE;
+// enum CARMOTION { PAUSE, LEFTWARD, FORWARD, RIGHTWARD, BACKWARD, STOP, RIGHT, TURNLEFT, TURNRIGHT };
+//enum CARMOTION direction = PAUSE;
 bool carDirection = 0;
 unsigned long readTime, readPeriod, ISRPeriod;
 int print_Count = 0;
@@ -129,9 +129,9 @@ void timerISR() {
   // ISRPeriod = micros() - ISRPeriod;
 }
 
+/***************************************set up*************************************************/
 void setup() {
-
-  pinMode(SINGLEGRAY_PIN, INPUT_PULLUP);
+  pinMode(SINGLEGRAY_PIN, INPUT_PULLUP); //12引脚初始化
 
   motors.init();
   motors.flipMotors(
@@ -200,7 +200,6 @@ void setup() {
     Serial.print(devStatus);
     Serial.println(F(")"));
   }
-
   delay(100);  //延时等待初始化完成
 
   Serial.println("Sunnybot 麦轮寻线测试，请按下对应按键开始测试");
@@ -223,24 +222,485 @@ void setup() {
 
   readPeriod = micros();
 }
-void loop() {
 
+/**********************************************小车运行分函数定义*********************************************/
+
+void PAUSE(unsigned long currentMillis, int PAUSETIME){
+  linear_vel_x = 0;  // m/s
+  if (GrayUartOutputIO.ioCount) {
+    linear_vel_y = -0.01 * GrayUartOutputIO.offset;  // m/s
+  }
+  angular_vel_z = -realYawRad * 10;
+  //使用millis函数进行定时控制，代替delay函数
+  if (currentMillis - previousMillis >= PAUSETIME) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    isFirst=1;
+  }
+}
+
+
+void moveForward(unsigned long currentMillis,int BlackNumber,float kp,float kpz){
+  linear_vel_x = 0.3;  // m/s
+  if (GrayUartOutputIO.ioCount) {
+     linear_vel_y = -kp * GrayUartOutputIO.offset;
+    } else {
+  linear_vel_y = -linear_vel_y;
+    }                   // m/s
+  angular_vel_z = -realYawRad * kpz;
+  if (linenember==BlackNumber) {
+    previousMillis = currentMillis;
+    linenember=0;
+    motionstate = motionstate+1;//进入下一阶段
+    }
+}
+void moveBackward(unsigned long currentMillis,int BlackNumber,float kp){
+  linear_vel_x = -0.15;  // m/s
+  if (GrayUartOutputIO.ioCount) {
+     linear_vel_y = -kp * GrayUartOutputIO.offset;
+    } else {
+  linear_vel_y = -linear_vel_y;
+    }                   // m/s
+  angular_vel_z = -realYawRad ;
+  if (linenember==BlackNumber) {
+    previousMillis = currentMillis;
+    linenember=0;
+    motionstate = motionstate+1;//进入下一阶段
+    }
+}
+void turnLeft(unsigned long currentMillis,float kp,float turntime){
+  linear_vel_x = 0;  // m/s
+  linear_vel_y = 0;  // m/s
+  angular_vel_z = 2;  // rad/s
+  if (currentMillis - previousMillis >= (0.3 * turntime)) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    linenember = 0;
+    isFirst = 1;
+  }
+}
+
+void turnRight(unsigned long currentMillis, float kp,float turntime){
+  linear_vel_x = 0;  // m/s
+  linear_vel_y = 0;  // m/s
+  angular_vel_z = -2;  // rad/s
+  if (currentMillis - previousMillis >= (0.3 * period)) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    linenember = 0;
+    isFirst = 1;
+  }
+}
+
+void Moveforwardtime(unsigned long currentMillis,float kp,float kpz,float movetime){
+  linear_vel_x = 0.3;  // m/s
+  if (GrayUartOutputIO.ioCount) {
+    linear_vel_y = -kp *2* GrayUartOutputIO.offset;
+  } else {
+  linear_vel_y = -linear_vel_y;
+  }                   // m/s
+  angular_vel_z = -realYawRad * kpz;
+  if (currentMillis - previousMillis >= movetime) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    linenember = 0;
+  }
+}
+
+void Moveleftforwardtime(unsigned long currentMillis,float kp,float kpz,float movetime){
+  linear_vel_y = 0.3; 
+  linear_vel_x = 0; // m/s
+  angular_vel_z = -realYawRad * kpz;
+  if (currentMillis - previousMillis >= movetime) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    linenember = 0;
+  }
+}
+
+void STOP(unsigned long currentMillis, int STOPTIME){
+//急停
+  linear_vel_x = 0;  // m/s
+  linear_vel_y = 0;  // m/s
+  angular_vel_z = 0;
+  motors.motorsBrake();
+  if (currentMillis - previousMillis >= STOPTIME) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    linenember = 0;
+    }
+}
+
+
+/************************************************小车运行阶段函数定义***********************************************/
+void generalstateplus(){
+    if(motionstate>motionstatepre){
+        generalstate++;
+        motionstate=1;
+        motionstatepre=1;
+    }
+    else{
+        motionstatepre=motionstate;
+    }
+}
+//起步右转到达二维码处
+void start(unsigned long currentMillis,float kp,float kpz){
+    switch(motionstate){
+      case 1: //第一阶段 出发//
+        moveForward(currentMillis,1,kp,kpz);
+        break;
+      case 2:
+        turnRight(currentMillis,kp,3000);
+        break;
+      case 3:
+        STOP(currentMillis,100);
+        break;
+      case 4:
+        PAUSE(currentMillis, 3000);
+        break;
+      case 5:
+        moveForward(currentMillis,2,kp,kpz);
+        break;
+      case 6:
+        STOP(currentMillis,100);
+        break;
+      case 7:
+        PAUSE(currentMillis,1000);
+        break;
+      case 8:
+        moveBackward(currentMillis,1,kp);//二维码停
+        break;
+      case 9:
+        STOP(currentMillis,100);
+        break;
+      case 10:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+        break;
+    }
+}
+
+//二维码到达原料区
+void rawmaterial1(unsigned long currentMillis,float kp,float kpz){
+    switch(motionstate){
+      case 1: 
+        moveForward(currentMillis,5,kp,kpz);
+        break;
+      case 2:
+        STOP(currentMillis,100);
+        break;
+      case 3:
+        PAUSE(currentMillis,1000);
+        break;
+      case 4:
+        moveBackward(currentMillis,1,kp);//原料停
+        break;
+      case 5:
+        STOP(currentMillis,100);
+        break;
+      case 6:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+        break;
+    }
+}
+
+//原料区到达粗加工区
+void roughmachining1(unsigned long currentMillis,float kp,float kpz){
+    switch(motionstate){
+      case 1:
+        moveForward(currentMillis,2,kp,kpz);
+      break;
+    case 2:
+        STOP(currentMillis,100);
+      break;
+    case 3:
+        PAUSE(currentMillis,1000);
+      break;
+    case 4:
+        turnLeft(currentMillis,kp,3150);
+      break;
+    case 5:
+        STOP(currentMillis,100);
+      break;
+    case 6:
+        PAUSE(currentMillis,3000);
+      break;
+    case 7:
+        moveForward(currentMillis,3,kp,kpz);
+      break;
+    case 8:
+        STOP(currentMillis,100);
+      break;
+    case 9:
+        PAUSE(currentMillis,1000);
+      break;
+    case 10:
+        moveBackward(currentMillis,1,kp);//粗加工区停
+      break;
+    case 11:
+        STOP(currentMillis,100);
+      break;
+    case 12:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+      break;
+    }
+}
+
+//粗加工区到达半成品区
+void semifinishedproduct1(unsigned long currentMillis,float kp,float kpz){
+    switch(motionstate){
+    case 1:
+      moveForward(currentMillis,3,kp,kpz);
+      break;
+    case 2:
+      STOP(currentMillis,100);
+      break;
+    case 3:
+      PAUSE(currentMillis,1000);
+      break;
+    case 4:
+      turnLeft(currentMillis,kp,3200);
+      break;
+    case 5:
+      STOP(currentMillis,100);
+      break;  
+    case 6:
+      PAUSE(currentMillis,3000);
+      break;
+    case 7:
+      moveForward(currentMillis,3,kp,kpz);
+      break;
+    case 8:
+      STOP(currentMillis,100);
+      break;
+    case 9: 
+      PAUSE(currentMillis,1000);
+      break;
+    case 10:
+      moveBackward(currentMillis,1,kp);//半成品区停
+      break;
+    case 11:
+      STOP(currentMillis,100);
+      break;
+    case 12:
+      PAUSE(currentMillis,3000);
+      generalstateplus();
+      break;
+    }
+}
+
+//半成品区到达原料区
+void rawmaterial1(unsigned long currentMillis,float kp,float kp2,float kpz){
+    switch(motionstate){
+      case 1:
+        turnLeft(currentMillis,kp2,3130);
+        break;
+      case 2:
+        STOP(currentMillis,100);
+        break;
+      case 3:
+        PAUSE(currentMillis,1000);
+        break;
+      case 4:
+        moveForward(currentMillis,5,kp,kpz);
+        break;
+      case 5:
+        STOP(currentMillis,100);
+        break;
+      case 6:
+        PAUSE(currentMillis,1000);
+        break;
+      //important
+      case 7:
+        turnLeft(currentMillis,kp2,3130);
+        break;
+      case 8:
+        STOP(currentMillis,100);
+        break;
+      case 9:
+        PAUSE(currentMillis,3000);
+        break;
+      case 10:
+        moveForward(currentMillis,2,kp,kpz);
+        break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        PAUSE(currentMillis,1000);
+        break;
+      case 13:
+        moveBackward(currentMillis,1,kp);//原料区停
+        break;
+      case 14:
+        STOP(currentMillis,100);
+        break;
+      case 15:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+        break;
+    }
+}
+    
+//原料区到达粗加工区
+void roughmachining2(unsigned long currentMillis,float kp,float kp2,float kpz){
+    switch(motionstate){
+      case 1:
+        moveForward(currentMillis,2,kp,kpz);
+        break;
+      case 2:
+        STOP(currentMillis,100);
+        break;
+      case 3:
+        PAUSE(currentMillis,1000);
+        break;
+      //important
+      case 4:
+        turnLeft(currentMillis,kp2,3150);
+        break;
+      case 5: 
+        STOP(currentMillis,100);
+        break;
+      case 6:
+        PAUSE(currentMillis,3000);
+        break;
+      case 7:
+        moveForward(currentMillis,3,kp,kpz);
+        break;
+      case 8:
+        STOP(currentMillis,100);
+        break;
+      case 9:
+        PAUSE(currentMillis,1000);
+        break;
+      case 10:
+        moveBackward(currentMillis,1,kp);//粗加工区停
+        break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+        break;
+    }
+}
+
+//粗加工区到达半成品区
+void semifinishedproduct1(unsigned long currentMillis,float kp,float kp2,float kpz){
+    switch(motionstate){
+      case 1:
+        moveForward(currentMillis,3,kp,kpz);
+        break;
+      case 2:
+        STOP(currentMillis,100);
+        break;
+      case 3:
+        PAUSE(currentMillis,1000);
+        break;
+      case 4:
+        turnLeft(currentMillis,kp2,3200);
+        break;
+      case 5:
+        STOP(currentMillis,100);
+        break;
+      case 6:
+        PAUSE(currentMillis,3000);
+        break;
+      case 7:
+        moveForward(currentMillis,3,kp,kpz);
+        break;
+      case 8:
+        STOP(currentMillis,100);
+        break;
+      case 9:
+        PAUSE(currentMillis,1000);
+        break;
+      case 10:
+        moveBackward(currentMillis,1,kp);//半成品区2停
+        break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+        break;
+    }
+}    
+
+//半成品区到达终点
+void destination(unsigned long currentMillis,float kp,float kp2,float kpz){
+    switch(motionstate){
+      case 1:
+        moveForward(currentMillis,4,kp,kpz);
+        break;
+      case 2:
+        STOP(currentMillis,100);
+        break;
+      case 3:
+        PAUSE(currentMillis,1000);
+        break;
+      case 4:
+        turnRight(currentMillis,kp2,3100);
+        break;
+      case 5:
+        STOP(currentMillis,100);
+        break;
+      case 6:
+        PAUSE(currentMillis,3000);
+        break;
+      case 7:
+        moveForward(currentMillis,1,kp,kpz);
+        break;
+      case 8:
+        STOP(currentMillis,100);
+        break;
+      case 9:
+        PAUSE(currentMillis,1000);
+        break;
+      case 10:
+        Moveforwardtime(currentMillis,kp,kpz,600);
+       break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        PAUSE(currentMillis,1000);
+        break;
+      case 13:
+        Moveleftforwardtime(currentMillis,kp,kpz,650);
+        break;
+      case 14:
+        STOP(currentMillis,100);
+        break;
+      case 15:
+        PAUSE(currentMillis,3000);
+        generalstateplus();
+        break;
+    }
+}
+
+
+/**********************************************loop**************************************************/
+void loop() {
 
   //黑线数计数
   ColorP12=digitalRead(SINGLEGRAY_PIN);
   if (ColorP12==1){
     KANGGANRAO=KANGGANRAO+1;//抗干扰达到3次证明确实是黑线
   }
-  if (ColorP12==1&&KANGGANRAO==3){
+  if (ColorP12==1&&KANGGANRAO==4){
     Record=ColorP12;
   }
   if(ColorP12==0&&Record==1){//出黑色区域
     linenember=linenember+1;
     KANGGANRAO=0;
-    Record==0;
+    Record=0;
   }
 
-  //方式2
   if (micros() - readPeriod > 5000)  //每5ms读取一次
   {
     readPeriod = micros();
@@ -248,7 +708,7 @@ void loop() {
     GrayUartOutputIO = GraySensors.readUart();  //读取串口数字量数据
     readTime = micros() - readTime;
   }
-  //方式2
+
   //****************** MPU6050***************************//
   if (!dmpReady) return;
   // read a packet from FIFO
@@ -264,10 +724,11 @@ void loop() {
     initialYawRad = newYawRad;
     isFirst = 0;
   }
-  realYawRad = newYawRad - initialYawRad;
+  realYawRad = (newYawRad - initialYawRad);
   realYaw = rad2angle(realYawRad);
   initialYaw = rad2angle(initialYawRad);
   newYaw = rad2angle(newYawRad);
+
   //****************** MPU6050***************************//
   // realYaw=57.29578*realYawRad;
   // realYaw = newYaw - initialYaw;
@@ -278,79 +739,50 @@ void loop() {
   //****************** MPU6050***************************//
 
   unsigned long currentMillis = millis();  // store the current time
-  float kp = 0.003;
-#ifndef DEBUG
-  kp = 0.002;  //
-#endif
+  float kp = 0.01;
+  float kp2 = 0.0095;
+  float kpz = 0.053;
 
   //使用有限状态机方式前后走
-  switch (direction) {
-    case PAUSE:  //校正
-
-      linear_vel_x = 0;  // m/s
-      if (GrayUartOutputIO.ioCount) {
-        linear_vel_y = -0.005 * GrayUartOutputIO.offset;  // m/s
-      }
-      angular_vel_z = 0;  // rad/s
-      //使用millis函数进行定时控制，代替delay函数
-      if (currentMillis - previousMillis >= period) {
-        previousMillis = currentMillis;
-        direction = FORWARD;
-      }
+ 
+  switch (generalstate) {
+    case 1: //出发到达二维码处
+      start(currentMillis,kp,kpz);
       break;
-
-    case STOP:
-      //急停
-      motors.motorsBrake();
-      if (currentMillis - previousMillis >= 100) {
-        previousMillis = currentMillis;
-        direction = PAUSE;
-      }
+    case 2:
+      rawmaterial1(currentMillis,kp, kpz);
       break;
-
-    case FORWARD:          //前进
-      if (MotionState==1){
-        linear_vel_x = 0.3;  // m/s
-        if (GrayUartOutputIO.ioCount) {
-          linear_vel_y = -kp * GrayUartOutputIO.offset;
-        }
-        else {
-          linear_vel_y = -linear_vel_y;
-        }                   // m/s
-        angular_vel_z = 0;  // rad/s
-        if (linenember==4) {
-          previousMillis = currentMillis;
-          direction = STOP;
-        }
-      }
-    break;
-
-    case BACKWARD:          //后退
-      linear_vel_x = -0.3;  // m/s
-      if (GrayUartOutputIO.ioCount) {
-        linear_vel_y = -kp * GrayUartOutputIO.offset;  // m/s
-      }
-      carDirection = 0;
-      angular_vel_z = 0;  // rad/s
-      if (currentMillis - previousMillis >= (2 * period)) {
-        previousMillis = currentMillis;
-        direction = STOP;
-      }
+    case 3:
+      roughmachining1(currentMillis,kp, kpz);
       break;
-    default:             //停止
+    case 4:
+      semifinishedproduct1(currentMillis,kp, kpz);
+      break;
+    case 5:
+      rawmaterial1(currentMillis,kp,kp2, kpz);
+      break;
+    case 6:
+      roughmachining2(currentMillis,kp,kp2, kpz);
+      break;
+    case 7:
+      semifinishedproduct1(currentMillis,kp,kp2, kpz);
+      break;
+    case 8:
+      destination(currentMillis,kp,kp2, kpz);
+      break;
+      
+    default:      //停止
       linear_vel_x = 0;  // m/s
       if (GrayUartOutputIO.ioCount) {
         linear_vel_y = -kp * GrayUartOutputIO.offset;  // m/s
       }
       angular_vel_z = 0;  // rad/s
-      if (currentMillis - previousMillis >= period) {
-        previousMillis = currentMillis;
-        direction = PAUSE;
-      }
       break;
   }
+
+
 //角度闭环
-angular_vel_z = -realYaw * 0.1;
+// angular_vel_z = -realYaw * 0.1;
   // given the required velocities for the robot, you can calculate
   // the rpm or pulses required for each motor 逆运动学
   // rpm = kinematics.getRPM(linear_vel_x, linear_vel_y, angular_vel_z);
@@ -433,3 +865,4 @@ angular_vel_z = -realYaw * 0.1;
     print_Count = 0;
   }
 }
+
