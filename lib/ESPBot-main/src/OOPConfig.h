@@ -59,10 +59,10 @@
 #define WHEEL_DIAMETER \
   0.065  // wheel's diameter in meters 0.06、0.065、0.08 必须保留小数点 单位m
 #define LR_WHEELS_DISTANCE \
-  0.19  // distance between left and right wheels左右轮距，单位m 左右轮距
+  0.18  // distance between left and right wheels左右轮距，单位m 左右轮距
         // 必须保留小数点
 #define FR_WHEELS_DISTANCE \
-  0.165  // distance between front and rear wheels. Ignore this if you're on
+  0.1415  // distance between front and rear wheels. Ignore this if you're on
          // 2WD/ACKERMANN 前后轴距，单位m  0.165 共轴 0.19 必须保留小数点
 #define CENTER_WHEELS_DISTANCE 0.1  //  三轮旋转中心到轮距离，单位m
 #elif BT(OMNI3)
