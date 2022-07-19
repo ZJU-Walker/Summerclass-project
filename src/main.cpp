@@ -1,12 +1,8 @@
 #include <Ticker.h>  //定时中断
 #include "OOPConfig.h"
+#include <esp_now.h>
+#include <WiFi.h>
 
-#ifdef USE_OLED
-#include <U8g2lib.h>  //点击自动打开管理库页面并安装: http://librarymanager/All#U8g2
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(
-    U8G2_R0, /* reset=*/U8X8_PIN_NONE, /* clock=*/SCL,
-    /* data=*/SDA);  // ESP32 Thing, HW I2C with pin remapping
-#endif
 
 #ifdef USE_MPU6050_DMP
 //使用带DMP的支持ESP32的MPU6050库
@@ -129,10 +125,47 @@ void timerISR() {
   // ISRPeriod = micros() - ISRPeriod;
 }
 
+//*********************************通信*******************************//
+uint8_t broadcastAddress[] = {0x94,0x3C,0xC6,0x11,0x07,0x08};//机械臂板子MAC地址
+// // 信息结构体类型
+typedef struct struct_message {
+  int b;
+} struct_message;
+// 创建一个结构体变量
+struct_message Datasendarm;//发送结构体
+struct_message Datarecvarm;//接收结构体
+// 回调函数,函数将在发送消息时执行。此函数告诉我们信息是否成功发送;
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("\r\nLast Packet Send Status:\t");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
+
+// 回调函数,当收到消息时会调佣该函数
+void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
+  memcpy(&Datarecvarm, incomingData, sizeof(Datarecvarm));
+}
+//发送函数，小车向机械臂发送int 类型表示小车运动结束，到达一个地点，机械臂开始运动
+//发送int state 1               2              3             4
+//        到达二维码区     到达原料区       到达半成品区    到达放置区
+void sendfunction(int state){
+  //发送信息到指定ESP32上
+  Datasendarm.b = state;
+  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &Datasendarm, sizeof(Datasendarm));
+   
+ //判断是否发送成功
+  if (result == ESP_OK) {
+    Serial.println("Sent with success");
+  }
+  else {
+    Serial.println("Error sending the data");
+  }
+  delay(2000);
+}
 /***************************************set up*************************************************/
 void setup() {
   pinMode(SINGLEGRAY_PIN, INPUT_PULLUP); //12引脚初始化
-
+  Datarecvarm.b=0;
+  Datasendarm.b=0;
   motors.init();
   motors.flipMotors(
       FLIP_MOTOR[0], FLIP_MOTOR[1], FLIP_MOTOR[2],
@@ -145,16 +178,30 @@ void setup() {
   delay(100);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   Serial.begin(BAUDRATE);
-  // OLED初始化 先LED再MPU6050
-#ifdef USE_OLED
-  u8g2.begin();
-  u8g2.enableUTF8Print();
-  u8g2.clearBuffer();               // clear the internal memory
-  u8g2.setFont(u8g2_font_7x14_tf);  // choose a suitable font
-  u8g2.setCursor(0, 16);
-  u8g2.print("MPU Init");
-  u8g2.sendBuffer();
-#endif
+  //******************ESP32_now setup******************//
+  // // 设置WIFI模式为STA模式，即无线终端
+  WiFi.mode(WIFI_STA);
+  // //  初始化ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+  //注册回调函数
+  esp_now_register_send_cb(OnDataSent);
+  // 注册通信频道
+  esp_now_peer_info_t peerInfo;
+  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
+  peerInfo.channel = 0;  //通道
+  peerInfo.encrypt = false;//是否加密 False
+    peerInfo.ifidx = WIFI_IF_STA;
+         
+  if (esp_now_add_peer(&peerInfo) != ESP_OK){
+    Serial.println("Failed to add peer");
+    return;
+  }
+  sendfunction(0);
+  //注册接收信息的回调函数
+  esp_now_register_recv_cb(OnDataRecv);
 
   //陀螺仪初始化
   Wire.begin();
@@ -202,12 +249,12 @@ void setup() {
   }
   delay(100);  //延时等待初始化完成
 
-  Serial.println("Sunnybot 麦轮寻线测试，请按下对应按键开始测试");
-    u8g2.clearBuffer();               // clear the internal memory
-  u8g2.setFont(u8g2_font_7x14_tf);  // choose a suitable font
-  u8g2.setCursor(0, 16);
-  u8g2.print("Press the BTN");
-  u8g2.sendBuffer();
+  // Serial.println("Sunnybot 麦轮寻线测试，请按下对应按键开始测试");
+  //   u8g2.clearBuffer();               // clear the internal memory
+  // u8g2.setFont(u8g2_font_7x14_tf);  // choose a suitable font
+  // u8g2.setCursor(0, 16);
+  // u8g2.print("Press the BTN");
+  // u8g2.sendBuffer();
   bool pflag=1;
   while (digitalRead(BUTTON_PIN) == HIGH) {
     if(pflag){
@@ -228,9 +275,23 @@ void setup() {
 void PAUSE(unsigned long currentMillis, int PAUSETIME){
   linear_vel_x = 0;  // m/sz
   if (GrayUartOutputIO.ioCount) {
-    linear_vel_y = -0.015 * GrayUartOutputIO.offset;  // m/s
+    linear_vel_y = -0.005 * GrayUartOutputIO.offset;  // m/s
   }
-  angular_vel_z = -realYawRad * 8;   //*原始代码为2
+  angular_vel_z = -realYawRad * 2;   //*原始代码为2
+  //使用millis函数进行定时控制，代替delay函数
+  if (currentMillis - previousMillis >= PAUSETIME) {
+    previousMillis = currentMillis;
+    motionstate = motionstate+1;//进入下一阶段
+    isFirst=1;
+  }
+}
+
+void UNZPAUSE(unsigned long currentMillis, int PAUSETIME){
+  linear_vel_x = 0;  // m/sz
+  if (GrayUartOutputIO.ioCount) {
+    linear_vel_y = -0.004 * GrayUartOutputIO.offset;  // m/s
+  }
+  angular_vel_z = -realYawRad * 0.0001;   //*原始代码为2
   //使用millis函数进行定时控制，代替delay函数
   if (currentMillis - previousMillis >= PAUSETIME) {
     previousMillis = currentMillis;
@@ -240,8 +301,8 @@ void PAUSE(unsigned long currentMillis, int PAUSETIME){
 }
 
 
-void moveForward(unsigned long currentMillis,int BlackNumber,float kp,float kpz){
-  linear_vel_x = 0.3;  // m/s
+void moveForward(unsigned long currentMillis,int BlackNumber,float kp,float kpz,float speed){
+  linear_vel_x = speed;  // m/s
   if (GrayUartOutputIO.ioCount) {
      linear_vel_y = -kp * GrayUartOutputIO.offset;
     } else {
@@ -255,7 +316,7 @@ void moveForward(unsigned long currentMillis,int BlackNumber,float kp,float kpz)
     }
 }
 void moveBackward(unsigned long currentMillis,int BlackNumber,float kp){
-  linear_vel_x = -0.15;  // m/s
+  linear_vel_x = -0.18;  // m/s
   if (GrayUartOutputIO.ioCount) {
      linear_vel_y = -kp * GrayUartOutputIO.offset;
     } else {
@@ -284,7 +345,7 @@ void turnRight(unsigned long currentMillis, float kp,float turntime){
   linear_vel_x = 0;  // m/s
   linear_vel_y = 0;  // m/s
   angular_vel_z = -2;  // rad/s
-  if (currentMillis - previousMillis >= (0.35 * period)) {
+  if (currentMillis - previousMillis >= (0.34 * turntime)) {
     previousMillis = currentMillis;
     motionstate = motionstate+1;//进入下一阶段
     linenember = 0;
@@ -304,6 +365,7 @@ void Moveforwardtime(unsigned long currentMillis,float kp,float kpz,float moveti
     previousMillis = currentMillis;
     motionstate = motionstate+1;//进入下一阶段
     linenember = 0;
+    isFirst = 1;
   }
 }
 
@@ -315,6 +377,7 @@ void Moveleftforwardtime(unsigned long currentMillis,float kp,float kpz,float mo
     previousMillis = currentMillis;
     motionstate = motionstate+1;//进入下一阶段
     linenember = 0;
+    isFirst = 1;
   }
 }
 
@@ -350,10 +413,10 @@ void generalstateplus(){
 void start(unsigned long currentMillis,float kp,float kpz){
     switch(motionstate){
       case 1: //第一阶段 出发//
-        moveForward(currentMillis,2,kp,kpz);
+        moveForward(currentMillis,2,0,0,0.2);
         break;
       case 2:
-        turnRight(currentMillis,kp,3000);
+        turnRight(currentMillis,kp,3050);
         break;
       case 3:
         STOP(currentMillis,100);
@@ -362,7 +425,7 @@ void start(unsigned long currentMillis,float kp,float kpz){
         PAUSE(currentMillis, 3000);
         break;
       case 5:
-        moveForward(currentMillis,2,kp,0.053);
+        moveForward(currentMillis,2,kp,0.02,0.25);
         break;
       case 6:
         STOP(currentMillis,100);
@@ -377,8 +440,24 @@ void start(unsigned long currentMillis,float kp,float kpz){
         STOP(currentMillis,100);
         break;
       case 10:
-        PAUSE(currentMillis,3000);
-        generalstateplus();
+        PAUSE(currentMillis,2000);
+        break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        sendfunction(1);
+        if(Datarecvarm.b == 1){
+          currentMillis = millis();
+          previousMillis = currentMillis;
+          sendfunction(0);
+          Datarecvarm.b=0;
+          motionstate++;
+        }
+        break;
+      case 13:
+        generalstate++;
+        motionstate=1;
         break;
     }
 }
@@ -387,7 +466,7 @@ void start(unsigned long currentMillis,float kp,float kpz){
 void rawmaterial1(unsigned long currentMillis,float kp,float kpz){
     switch(motionstate){
       case 1: 
-        moveForward(currentMillis,5,kp,0.052);
+        moveForward(currentMillis,5,kp,0.03,0.2);
         break;
       case 2:
         STOP(currentMillis,100);
@@ -396,15 +475,49 @@ void rawmaterial1(unsigned long currentMillis,float kp,float kpz){
         PAUSE(currentMillis,2000);
         break;
       case 4:
-        moveBackward(currentMillis,1,kp);//原料停
+        moveBackward(currentMillis,1,kp);
         break;
       case 5:
         STOP(currentMillis,100);
         break;
       case 6:
         PAUSE(currentMillis,3000);
-        generalstateplus();
         break;
+      case 7:
+        turnRight(currentMillis,kp,3030);
+        break;
+      case 8:
+        STOP(currentMillis,100);
+        break;
+      case 9:
+        UNZPAUSE(currentMillis,3000);
+        break;
+      case 10:
+        Moveforwardtime(currentMillis,0.001,0.005,830);
+        break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        UNZPAUSE(currentMillis,3000);
+        break;
+      case 13:
+        STOP(currentMillis,100);
+        break;
+      case 14:
+        sendfunction(2);
+        if(Datarecvarm.b == 1){
+          currentMillis = millis();
+          previousMillis = currentMillis;
+          sendfunction(0);
+          Datarecvarm.b = 0;
+          motionstate++;
+        }
+        break;
+      case 15:
+        generalstate++;
+        motionstate=1;
+        break; 
     }
 }
 
@@ -412,42 +525,58 @@ void rawmaterial1(unsigned long currentMillis,float kp,float kpz){
 void roughmachining1(unsigned long currentMillis,float kp,float kpz){
     switch(motionstate){
       case 1:
-        moveForward(currentMillis,2,kp,kpz);
-      break;
-    case 2:
+        moveBackward(currentMillis,3,kp);
+        break;
+      case 2:
         STOP(currentMillis,100);
-      break;
-    case 3:
+        break;
+      case 3:
         PAUSE(currentMillis,2000);
-      break;
-    case 4:
-        turnLeft(currentMillis,kp,3150);
-      break;
-    case 5:
+        break;
+      case 4:
+        moveForward(currentMillis,1,kp,0.052,0.15);
+        break;
+      case 5:
         STOP(currentMillis,100);
-      break;
-    case 6:
-        PAUSE(currentMillis,3000);
-      break;
-    case 7:
-        moveForward(currentMillis,4,kp,kpz);
-      break;
-    case 8:
-        STOP(currentMillis,100);
-      break;
-    case 9:
+        break;
+      case 6:
         PAUSE(currentMillis,2000);
-      break;
-    case 10:
-        moveBackward(currentMillis,1,kp);//粗加工区停
-      break;
-    case 11:
+        break;
+      case 7:
+        turnLeft(currentMillis,kp,3000);
+        break;
+      case 8:
         STOP(currentMillis,100);
-      break;
-    case 12:
+        break;
+      case 9:
         PAUSE(currentMillis,3000);
-        generalstateplus();
-      break;
+        break;
+      case 10:
+        Moveforwardtime(currentMillis,0.0008,0.002,830);
+        break;
+      case 11:
+        STOP(currentMillis,100);
+        break;
+      case 12:
+        UNZPAUSE(currentMillis,3000);
+        break;
+      case 13:
+        STOP(currentMillis,100);
+        break;
+      case 14:
+        sendfunction(3);
+        if(Datarecvarm.b == 1){
+          currentMillis = millis();
+          previousMillis = currentMillis;
+          sendfunction(0);
+          Datarecvarm.b = 0;
+          motionstate++;
+        }
+        break;
+      case 15:
+        generalstate++;
+        motionstate=1;
+        break;
     }
 }
 
@@ -455,7 +584,7 @@ void roughmachining1(unsigned long currentMillis,float kp,float kpz){
 void semifinishedproduct1(unsigned long currentMillis,float kp,float kpz){
     switch(motionstate){
     case 1:
-      moveForward(currentMillis,3,kp,kpz);
+      moveForward(currentMillis,3,kp,kpz,0.3);
       break;
     case 2:
       STOP(currentMillis,100);
@@ -473,7 +602,7 @@ void semifinishedproduct1(unsigned long currentMillis,float kp,float kpz){
       PAUSE(currentMillis,3000);
       break;
     case 7:
-      moveForward(currentMillis,4,kp,kpz);
+      moveForward(currentMillis,4,kp,kpz,0.3);
       break;
     case 8:
       STOP(currentMillis,100);
@@ -507,7 +636,7 @@ void rawmaterial1(unsigned long currentMillis,float kp,float kp2,float kpz){
         PAUSE(currentMillis,2000);
         break;
       case 4:
-        moveForward(currentMillis,6,kp,0.052);
+        moveForward(currentMillis,6,kp,0.05,0.3);
         break;
       case 5:
         STOP(currentMillis,100);
@@ -526,7 +655,7 @@ void rawmaterial1(unsigned long currentMillis,float kp,float kp2,float kpz){
         PAUSE(currentMillis,3000);
         break;
       case 10:
-        moveForward(currentMillis,3,kp,kpz);
+        moveForward(currentMillis,3,kp,kpz,0.3);
         break;
       case 11:
         STOP(currentMillis,100);
@@ -551,7 +680,7 @@ void rawmaterial1(unsigned long currentMillis,float kp,float kp2,float kpz){
 void roughmachining2(unsigned long currentMillis,float kp,float kp2,float kpz){
     switch(motionstate){
       case 1:
-        moveForward(currentMillis,2,kp,kpz);
+        moveForward(currentMillis,2,kp,kpz,0.3);
         break;
       case 2:
         STOP(currentMillis,100);
@@ -570,7 +699,7 @@ void roughmachining2(unsigned long currentMillis,float kp,float kp2,float kpz){
         PAUSE(currentMillis,3000);
         break;
       case 7:
-        moveForward(currentMillis,4,kp,kpz);
+        moveForward(currentMillis,4,kp,kpz,0.3);
         break;
       case 8:
         STOP(currentMillis,100);
@@ -595,7 +724,7 @@ void roughmachining2(unsigned long currentMillis,float kp,float kp2,float kpz){
 void semifinishedproduct1(unsigned long currentMillis,float kp,float kp2,float kpz){
     switch(motionstate){
       case 1:
-        moveForward(currentMillis,3,kp,kpz);
+        moveForward(currentMillis,3,kp,kpz,0.3);
         break;
       case 2:
         STOP(currentMillis,100);
@@ -613,7 +742,7 @@ void semifinishedproduct1(unsigned long currentMillis,float kp,float kp2,float k
         PAUSE(currentMillis,3000);
         break;
       case 7:
-        moveForward(currentMillis,4,kp,kpz);
+        moveForward(currentMillis,4,kp,kpz,0.3);
         break;
       case 8:
         STOP(currentMillis,100);
@@ -638,7 +767,7 @@ void semifinishedproduct1(unsigned long currentMillis,float kp,float kp2,float k
 void destination(unsigned long currentMillis,float kp,float kp2,float kpz){
     switch(motionstate){
       case 1:
-        moveForward(currentMillis,4,kp,kpz);
+        moveForward(currentMillis,4,kp,kpz,0.3);
         break;
       case 2:
         STOP(currentMillis,100);
@@ -656,7 +785,7 @@ void destination(unsigned long currentMillis,float kp,float kp2,float kpz){
         PAUSE(currentMillis,3000);
         break;
       case 7:
-        moveForward(currentMillis,2,kp,kpz);
+        moveForward(currentMillis,2,kp,kpz,0.3);
         break;
       case 8:
         STOP(currentMillis,100);
@@ -793,22 +922,22 @@ void loop() {
   // the rpm or pulses required for each motor 逆运动学
   // rpm = kinematics.getRPM(linear_vel_x, linear_vel_y, angular_vel_z);
   pluses = kinematics.getPulses(linear_vel_x, linear_vel_y, angular_vel_z);
-#ifdef DEBUG_INFO
-  Serial.print((String) "黑色点数：" + GrayUartOutputIO.ioCount +
-               "点变化数:" + GrayUartOutputIO.ioChangeCount + "偏移量：" +
-               GrayUartOutputIO.offset);
-  Serial.print("二进制IO值:");
-  Serial.print(GrayUartOutputIO.ioDigital, BIN);
-  Serial.print("ReadTime:");
-  Serial.print(readTime);
-  Serial.println("微秒");
-  Serial.print("Time:");
-  Serial.print(millis());
-    Serial.print("realYaw(度):");
-  Serial.println(realYaw);
-  // Serial.print("ISRPeriod:");
-  // Serial.println(ISRPeriod);
-#endif
+// #ifdef DEBUG_INFO
+//   Serial.print((String) "黑色点数：" + GrayUartOutputIO.ioCount +
+//                "点变化数:" + GrayUartOutputIO.ioChangeCount + "偏移量：" +
+//                GrayUartOutputIO.offset);
+//   Serial.print("二进制IO值:");
+//   Serial.print(GrayUartOutputIO.ioDigital, BIN);
+//   Serial.print("ReadTime:");
+//   Serial.print(readTime);
+//   Serial.println("微秒");
+//   Serial.print("Time:");
+//   Serial.print(millis());
+//     Serial.print("realYaw(度):");
+//   Serial.println(realYaw);
+//   // Serial.print("ISRPeriod:");
+//   // Serial.println(ISRPeriod);
+// #endif
   if (print_Count >= 50)  //打印控制，控制周期500ms
   {
 #ifdef DEBUG
